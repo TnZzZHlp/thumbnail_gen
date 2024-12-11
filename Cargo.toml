@@ -5,3 +5,4 @@ version = "0.1.0"
 
 [dependencies]
 image = {version = "0.25.5", features = ["jpeg"]}
+tokio = { version = "1.42.0", features = ["full"] }

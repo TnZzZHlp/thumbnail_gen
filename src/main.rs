@@ -1,11 +1,14 @@
-use std::env;
+use std::{ env, sync::Arc };
+
+use tokio::task::JoinSet;
 
 static WID_PICS: u32 = 7;
 static HEI_PICS: u32 = 7;
 
-fn main() {
+#[tokio::main]
+async fn main() {
     // 调用ffprobe获取视频信息
-    let video_path = env::args().nth(1).expect("no video provided");
+    let video_path = Arc::new(env::args().nth(1).expect("no video provided"));
 
     let vid_info = get_vid_info(&video_path);
 
@@ -14,17 +17,20 @@ fn main() {
     let final_height: u32 = vid_info.height * HEI_PICS + 10 * (HEI_PICS + 1);
 
     // 计算每隔多少秒取一帧
-    let frame_interval = vid_info.duration / ((WID_PICS * HEI_PICS) as f64);
+    let interval = (vid_info.duration / ((WID_PICS * HEI_PICS) as f64)) * 0.9;
+
+    println!("{}", interval);
 
     // 调用ffmpeg提取图片
-    let mut pics = Vec::new();
+    let mut tasks = JoinSet::new();
 
     for i in 1..=WID_PICS * HEI_PICS {
-        let time = ((i as f64) * frame_interval) as u32;
-        println!("正在提取第{}张图片，时间：{}", i, time);
-        let pic = extract_pic(&video_path, time);
-        pics.push(pic);
+        let time = ((i as f64) * interval) as u32;
+        let video_path = Arc::clone(&video_path);
+        tasks.spawn(extract_pic(video_path, time));
     }
+
+    let pics: Vec<Vec<u8>> = tasks.join_all().await.into_iter().collect();
 
     // 保存图片
     let mut imgbuf = image::ImageBuffer::new(final_width as u32, final_height as u32);
@@ -32,18 +38,10 @@ fn main() {
     let mut row = 1;
     let mut col = 1;
 
-    pics.iter()
-        .map(|pic| pic.len())
-        .for_each(|len| {
-            println!("图片大小：{}", len);
-        });
-
     for (i, pic) in pics.iter().enumerate() {
         // 计算当前图片的位置
         let x = col * 10 + (col - 1) * vid_info.width;
         let y = row * 10 + (row - 1) * vid_info.height;
-
-        println!("正在绘制第{}张图片，位置：({}, {})", i + 1, x, y);
 
         // 直接在原图上操作
         for py in 0..vid_info.height {
@@ -120,7 +118,9 @@ fn get_vid_info(video_path: &str) -> VidInfo {
 }
 
 // 截取图片
-fn extract_pic(video_path: &str, time: u32) -> Vec<u8> {
+async fn extract_pic(video_path: Arc<String>, time: u32) -> Vec<u8> {
+    println!("提取第 {} 秒的图片", time);
+
     let pic = std::process::Command
         ::new("ffmpeg")
         .args([
@@ -128,7 +128,7 @@ fn extract_pic(video_path: &str, time: u32) -> Vec<u8> {
             &time.to_string(),
             "-noaccurate_seek",
             "-i",
-            video_path,
+            &video_path,
             "-vframes",
             "1", // 改用 -vframes
             "-an",
