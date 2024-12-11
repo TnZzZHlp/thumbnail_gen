@@ -1,8 +1,7 @@
 [package]
+edition = "2021"
 name = "thumbnail_gen"
 version = "0.1.0"
-edition = "2021"
 
 [dependencies]
-ffmpeg-next = "7.1.0"
-image = { version = "0.25.5", features = ["jpeg"] }
+image = {version = "0.25.5", features = ["jpeg"]}

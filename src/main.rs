@@ -1,95 +1,54 @@
-extern crate ffmpeg_next as ffmpeg;
-
-use ffmpeg::format::{ input, Pixel };
-use ffmpeg::media::Type;
-use ffmpeg::software::scaling::{ context::Context, flag::Flags };
-use ffmpeg::util::frame::video::Video;
 use std::env;
 
-static WID_PICS: u64 = 4;
-static HEI_PICS: u64 = 4;
+static WID_PICS: u32 = 7;
+static HEI_PICS: u32 = 7;
 
-fn main() -> Result<(), ffmpeg::Error> {
-    println!("开始运行");
-    ffmpeg::init().unwrap();
+fn main() {
+    // 调用ffprobe获取视频信息
+    let video_path = env::args().nth(1).expect("no video provided");
 
-    let mut pics: Vec<Box<[u8]>> = Vec::new();
-    let mut final_height = 0;
-    let mut final_width = 0;
-    let mut pic_height = 0;
-    let mut pic_width = 0;
+    let vid_info = get_vid_info(&video_path);
 
-    if let Ok(mut ictx) = input(&env::args().nth(1).expect("Cannot open file.")) {
-        let input = ictx.streams().best(Type::Video).ok_or(ffmpeg::Error::StreamNotFound)?;
-        let video_stream_index = input.index();
+    // 计算最终图片的宽度和高度
+    let final_width: u32 = vid_info.width * WID_PICS + 10 * (WID_PICS + 1);
+    let final_height: u32 = vid_info.height * HEI_PICS + 10 * (HEI_PICS + 1);
 
-        let context_decoder = ffmpeg::codec::context::Context::from_parameters(input.parameters())?;
-        let mut decoder = context_decoder.decoder().video()?;
+    // 计算每隔多少秒取一帧
+    let frame_interval = vid_info.duration / ((WID_PICS * HEI_PICS) as f64);
 
-        let mut scaler = Context::get(
-            decoder.format(),
-            decoder.width(),
-            decoder.height(),
-            Pixel::RGB24,
-            decoder.width(),
-            decoder.height(),
-            Flags::BILINEAR
-        )?;
+    // 调用ffmpeg提取图片
+    let mut pics = Vec::new();
 
-        let interval =
-            (ictx.streams().best(ffmpeg::media::Type::Video).expect("没有视频流").frames() as u64) /
-            (WID_PICS * HEI_PICS);
-
-        let mut frame_index = 1;
-
-        let mut receive_and_process_decoded_frames = |
-            decoder: &mut ffmpeg::decoder::Video
-        | -> Result<(), ffmpeg::Error> {
-            let mut decoded = Video::empty();
-            while decoder.receive_frame(&mut decoded).is_ok() {
-                if frame_index % interval == 0 {
-                    println!("Decoded frame {}", frame_index);
-                    let mut rgb_frame = Video::empty();
-                    scaler.run(&decoded, &mut rgb_frame)?;
-                    pics.push(rgb_frame.data(0).to_vec().into_boxed_slice());
-                }
-                frame_index += 1;
-            }
-            final_height = decoder.height() * (HEI_PICS as u32) + ((HEI_PICS as u32) + 1) * 10;
-            final_width = decoder.width() * (WID_PICS as u32) + ((WID_PICS as u32) + 1) * 10;
-
-            pic_height = decoder.height();
-            pic_width = decoder.width();
-
-            Ok(())
-        };
-
-        for (stream, mut packet) in ictx.packets() {
-            if stream.index() == video_stream_index {
-                packet.set_position(200000);
-                decoder.send_packet(&packet)?;
-                receive_and_process_decoded_frames(&mut decoder)?;
-            }
-        }
-        decoder.send_eof()?;
-        receive_and_process_decoded_frames(&mut decoder)?;
+    for i in 1..=WID_PICS * HEI_PICS {
+        let time = ((i as f64) * frame_interval) as u32;
+        println!("正在提取第{}张图片，时间：{}", i, time);
+        let pic = extract_pic(&video_path, time);
+        pics.push(pic);
     }
 
-    // 生成缩略图
-    let mut imgbuf = image::ImageBuffer::new(final_width, final_height);
+    // 保存图片
+    let mut imgbuf = image::ImageBuffer::new(final_width as u32, final_height as u32);
 
     let mut row = 1;
     let mut col = 1;
 
+    pics.iter()
+        .map(|pic| pic.len())
+        .for_each(|len| {
+            println!("图片大小：{}", len);
+        });
+
     for (i, pic) in pics.iter().enumerate() {
         // 计算当前图片的位置
-        let x = col * 10 + (col - 1) * pic_width;
-        let y = row * 10 + (row - 1) * pic_height;
+        let x = col * 10 + (col - 1) * vid_info.width;
+        let y = row * 10 + (row - 1) * vid_info.height;
+
+        println!("正在绘制第{}张图片，位置：({}, {})", i + 1, x, y);
 
         // 直接在原图上操作
-        for py in 0..pic_height {
-            for px in 0..pic_width {
-                let base_index = (py * pic_width + px) * 3;
+        for py in 0..vid_info.height {
+            for px in 0..vid_info.width {
+                let base_index = (py * vid_info.width + px) * 3;
                 let r = pic[base_index as usize];
                 let g = pic[(base_index as usize) + 1];
                 let b = pic[(base_index as usize) + 2];
@@ -107,6 +66,95 @@ fn main() -> Result<(), ffmpeg::Error> {
     }
 
     imgbuf.save("output.jpg").unwrap();
+}
 
-    Ok(())
+struct VidInfo {
+    width: u32,
+    height: u32,
+    duration: f64,
+}
+
+fn get_vid_info(video_path: &str) -> VidInfo {
+    // 调用ffprobe获取视频信息
+    let info = std::process::Command
+        ::new("ffprobe")
+        .args([
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=width,height,duration",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
+            video_path,
+        ])
+        .output()
+        .expect("ffprobe failed");
+
+    let info_str = String::from_utf8(info.stdout).expect("ffprobe output is not utf8");
+
+    let mut lines = info_str.lines();
+
+    // 分别解析宽度、高度和时长
+    let width = lines
+        .next()
+        .and_then(|s| s.trim().parse::<u32>().ok())
+        .expect("无法解析视频宽度");
+
+    let height = lines
+        .next()
+        .and_then(|s| s.trim().parse::<u32>().ok())
+        .expect("无法解析视频高度");
+
+    let duration = lines
+        .next()
+        .and_then(|s| s.trim().parse::<f64>().ok())
+        .expect("无法解析视频时长");
+
+    VidInfo {
+        width,
+        height,
+        duration,
+    }
+}
+
+// 截取图片
+fn extract_pic(video_path: &str, time: u32) -> Vec<u8> {
+    let pic = std::process::Command
+        ::new("ffmpeg")
+        .args([
+            "-ss",
+            &time.to_string(),
+            "-noaccurate_seek",
+            "-i",
+            video_path,
+            "-vframes",
+            "1", // 改用 -vframes
+            "-an",
+            "-f",
+            "rawvideo",
+            "-pix_fmt",
+            "rgb24",
+            "pipe:1", // 使用 pipe:1 替代 -
+        ])
+        .stderr(std::process::Stdio::piped()) // 捕获错误输出
+        .stdout(std::process::Stdio::piped()) // 确保捕获标准输出
+        .output()
+        .expect("ffmpeg failed");
+
+    // 添加错误检查
+    if !pic.status.success() {
+        let error = String::from_utf8_lossy(&pic.stderr);
+        println!("FFmpeg error: {}", error);
+        panic!("FFmpeg 执行失败");
+    }
+
+    // 检查输出大小
+    if pic.stdout.is_empty() {
+        println!("警告：FFmpeg 没有输出任何数据");
+        panic!("提取图片失败");
+    }
+
+    pic.stdout
 }
