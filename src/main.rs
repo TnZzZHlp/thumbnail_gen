@@ -19,8 +19,6 @@ async fn main() {
     // 计算每隔多少秒取一帧
     let interval = (vid_info.duration / ((WID_PICS * HEI_PICS) as f64)) * 0.9;
 
-    println!("{}", interval);
-
     // 调用ffmpeg提取图片
     let mut tasks = JoinSet::new();
 
@@ -42,8 +40,7 @@ async fn main() {
     let mut row = 1;
     let mut col = 1;
 
-    for (i, (index, pic)) in pics.iter().enumerate() {
-        println!("处理第 {} 张图片", index);
+    for (i, (_, pic)) in pics.iter().enumerate() {
         // 计算当前图片的位置
         let x = col * 10 + (col - 1) * vid_info.width;
         let y = row * 10 + (row - 1) * vid_info.height;
