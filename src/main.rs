@@ -65,7 +65,9 @@ async fn main() {
         }
     }
 
-    imgbuf.save("output.jpg").unwrap();
+    imgbuf
+        .save(format!("{}/output.jpg", env::current_exe().unwrap().parent().unwrap().display()))
+        .unwrap();
 }
 
 struct VidInfo {
