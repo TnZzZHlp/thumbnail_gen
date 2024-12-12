@@ -68,7 +68,7 @@ async fn main() {
     imgbuf
         .save(
             Path::new(
-                &format!("{}/output.jpg", env::current_exe().unwrap().parent().unwrap().display())
+                &format!("{}/output.png", env::current_exe().unwrap().parent().unwrap().display())
             )
         )
         .unwrap();
