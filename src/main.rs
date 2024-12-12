@@ -27,10 +27,14 @@ async fn main() {
     for i in 1..=WID_PICS * HEI_PICS {
         let time = ((i as f64) * interval) as u32;
         let video_path = Arc::clone(&video_path);
-        tasks.spawn(extract_pic(video_path, time));
+        tasks.spawn(extract_pic(video_path, time, i));
     }
 
-    let pics: Vec<Vec<u8>> = tasks.join_all().await.into_iter().collect();
+    let pics: Vec<(u32, Vec<u8>)> = tasks.join_all().await.into_iter().collect();
+
+    // 按照索引排序
+    let mut pics = pics;
+    pics.sort_by_key(|(index, _)| *index);
 
     // 保存图片
     let mut imgbuf = image::ImageBuffer::new(final_width as u32, final_height as u32);
@@ -38,7 +42,8 @@ async fn main() {
     let mut row = 1;
     let mut col = 1;
 
-    for (i, pic) in pics.iter().enumerate() {
+    for (i, (index, pic)) in pics.iter().enumerate() {
+        println!("处理第 {} 张图片", index);
         // 计算当前图片的位置
         let x = col * 10 + (col - 1) * vid_info.width;
         let y = row * 10 + (row - 1) * vid_info.height;
@@ -118,7 +123,7 @@ fn get_vid_info(video_path: &str) -> VidInfo {
 }
 
 // 截取图片
-async fn extract_pic(video_path: Arc<String>, time: u32) -> Vec<u8> {
+async fn extract_pic(video_path: Arc<String>, time: u32, index: u32) -> (u32, Vec<u8>) {
     println!("提取第 {} 秒的图片", time);
 
     let pic = std::process::Command
@@ -156,5 +161,5 @@ async fn extract_pic(video_path: Arc<String>, time: u32) -> Vec<u8> {
         panic!("提取图片失败");
     }
 
-    pic.stdout
+    (index, pic.stdout)
 }
