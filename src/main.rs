@@ -1,5 +1,5 @@
-use std::{ env, sync::Arc };
-
+use std::{ env, path::Path, sync::Arc };
+use serde_json::Value;
 use tokio::task::JoinSet;
 
 static WID_PICS: u32 = 7;
@@ -66,7 +66,11 @@ async fn main() {
     }
 
     imgbuf
-        .save(format!("{}/output.jpg", env::current_exe().unwrap().parent().unwrap().display()))
+        .save(
+            Path::new(
+                &format!("{}/output.jpg", env::current_exe().unwrap().parent().unwrap().display())
+            )
+        )
         .unwrap();
 }
 
@@ -86,9 +90,10 @@ fn get_vid_info(video_path: &str) -> VidInfo {
             "-select_streams",
             "v:0",
             "-show_entries",
-            "stream=width,height,duration",
+            "stream=width,height",
+            "-show_format",
             "-of",
-            "default=noprint_wrappers=1:nokey=1",
+            "json",
             video_path,
         ])
         .output()
@@ -96,22 +101,14 @@ fn get_vid_info(video_path: &str) -> VidInfo {
 
     let info_str = String::from_utf8(info.stdout).expect("ffprobe output is not utf8");
 
-    let mut lines = info_str.lines();
+    let json: Value = serde_json::from_str(&info_str).expect("无法解析 JSON");
 
-    // 分别解析宽度、高度和时长
-    let width = lines
-        .next()
-        .and_then(|s| s.trim().parse::<u32>().ok())
-        .expect("无法解析视频宽度");
-
-    let height = lines
-        .next()
-        .and_then(|s| s.trim().parse::<u32>().ok())
-        .expect("无法解析视频高度");
-
-    let duration = lines
-        .next()
-        .and_then(|s| s.trim().parse::<f64>().ok())
+    let width = json["streams"][0]["width"].as_u64().expect("无法解析视频宽度") as u32;
+    let height = json["streams"][0]["height"].as_u64().expect("无法解析视频高度") as u32;
+    let duration = json["format"]["duration"]
+        .as_str()
+        .expect("无法解析视频时长")
+        .parse::<f64>()
         .expect("无法解析视频时长");
 
     VidInfo {
@@ -134,13 +131,13 @@ async fn extract_pic(video_path: Arc<String>, time: u32, index: u32) -> (u32, Ve
             "-i",
             &video_path,
             "-vframes",
-            "1", // 改用 -vframes
+            "1",
             "-an",
             "-f",
             "rawvideo",
             "-pix_fmt",
             "rgb24",
-            "pipe:1", // 使用 pipe:1 替代 -
+            "pipe:1",
         ])
         .stderr(std::process::Stdio::piped()) // 捕获错误输出
         .stdout(std::process::Stdio::piped()) // 确保捕获标准输出
@@ -152,12 +149,6 @@ async fn extract_pic(video_path: Arc<String>, time: u32, index: u32) -> (u32, Ve
         let error = String::from_utf8_lossy(&pic.stderr);
         println!("FFmpeg error: {}", error);
         panic!("FFmpeg 执行失败");
-    }
-
-    // 检查输出大小
-    if pic.stdout.is_empty() {
-        println!("警告：FFmpeg 没有输出任何数据");
-        panic!("提取图片失败");
     }
 
     (index, pic.stdout)
