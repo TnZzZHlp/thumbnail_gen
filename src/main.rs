@@ -2,76 +2,87 @@ use std::{ env, path::Path, sync::Arc };
 use serde_json::Value;
 use tokio::task::JoinSet;
 
-static WID_PICS: u32 = 7;
-static HEI_PICS: u32 = 7;
+static mut WID_PICS: u32 = 7;
+static mut HEI_PICS: u32 = 7;
 
 #[tokio::main]
 async fn main() {
-    // 调用ffprobe获取视频信息
-    let video_path = Arc::new(env::args().nth(1).expect("no video provided"));
+    unsafe {
+        // 调用ffprobe获取视频信息
+        let video_path = Arc::new(env::args().nth(1).expect("no video provided"));
 
-    let vid_info = get_vid_info(&video_path);
+        // 读取图片生成数量
+        if env::args().nth(2).is_some() {
+            WID_PICS = env::args().nth(2).unwrap().parse().expect("无法解析图片生成数量");
+            HEI_PICS = WID_PICS;
+        }
 
-    // 计算最终图片的宽度和高度
-    let final_width: u32 = vid_info.width * WID_PICS + 10 * (WID_PICS + 1);
-    let final_height: u32 = vid_info.height * HEI_PICS + 10 * (HEI_PICS + 1);
+        let vid_info = get_vid_info(&video_path);
 
-    // 计算每隔多少秒取一帧
-    let interval = (vid_info.duration / ((WID_PICS * HEI_PICS) as f64)) * 0.9;
+        // 计算最终图片的宽度和高度
+        let final_width: u32 = vid_info.width * WID_PICS + 10 * (WID_PICS + 1);
+        let final_height: u32 = vid_info.height * HEI_PICS + 10 * (HEI_PICS + 1);
 
-    // 调用ffmpeg提取图片
-    let mut tasks = JoinSet::new();
+        // 计算每隔多少秒取一帧
+        let interval = (vid_info.duration / ((WID_PICS * HEI_PICS) as f64)) * 0.9;
 
-    for i in 1..=WID_PICS * HEI_PICS {
-        let time = ((i as f64) * interval) as u32;
-        let video_path = Arc::clone(&video_path);
-        tasks.spawn(extract_pic(video_path, time, i));
-    }
+        // 调用ffmpeg提取图片
+        let mut tasks = JoinSet::new();
 
-    let pics: Vec<(u32, Vec<u8>)> = tasks.join_all().await.into_iter().collect();
+        for i in 1..=WID_PICS * HEI_PICS {
+            let time = ((i as f64) * interval) as u32;
+            let video_path = Arc::clone(&video_path);
+            tasks.spawn(extract_pic(video_path, time, i));
+        }
 
-    // 按照索引排序
-    let mut pics = pics;
-    pics.sort_by_key(|(index, _)| *index);
+        let pics: Vec<(u32, Vec<u8>)> = tasks.join_all().await.into_iter().collect();
 
-    // 保存图片
-    let mut imgbuf = image::ImageBuffer::new(final_width as u32, final_height as u32);
+        // 按照索引排序
+        let mut pics = pics;
+        pics.sort_by_key(|(index, _)| *index);
 
-    let mut row = 1;
-    let mut col = 1;
+        // 保存图片
+        let mut imgbuf = image::ImageBuffer::new(final_width as u32, final_height as u32);
 
-    for (i, (_, pic)) in pics.iter().enumerate() {
-        // 计算当前图片的位置
-        let x = col * 10 + (col - 1) * vid_info.width;
-        let y = row * 10 + (row - 1) * vid_info.height;
+        let mut row = 1;
+        let mut col = 1;
 
-        // 直接在原图上操作
-        for py in 0..vid_info.height {
-            for px in 0..vid_info.width {
-                let base_index = (py * vid_info.width + px) * 3;
-                let r = pic[base_index as usize];
-                let g = pic[(base_index as usize) + 1];
-                let b = pic[(base_index as usize) + 2];
+        for (i, (_, pic)) in pics.iter().enumerate() {
+            // 计算当前图片的位置
+            let x = col * 10 + (col - 1) * vid_info.width;
+            let y = row * 10 + (row - 1) * vid_info.height;
 
-                imgbuf.put_pixel(x + px, y + py, image::Rgb([r, g, b]));
+            // 直接在原图上操作
+            for py in 0..vid_info.height {
+                for px in 0..vid_info.width {
+                    let base_index = (py * vid_info.width + px) * 3;
+                    let r = pic[base_index as usize];
+                    let g = pic[(base_index as usize) + 1];
+                    let b = pic[(base_index as usize) + 2];
+
+                    imgbuf.put_pixel(x + px, y + py, image::Rgb([r, g, b]));
+                }
+            }
+
+            if (i + 1) % (WID_PICS as usize) == 0 {
+                row += 1;
+                col = 1;
+            } else {
+                col += 1;
             }
         }
 
-        if (i + 1) % (WID_PICS as usize) == 0 {
-            row += 1;
-            col = 1;
-        } else {
-            col += 1;
-        }
-    }
-
-    imgbuf
-        .save(
-            Path::new(
-                &format!("{}/output.jpg", env::current_exe().unwrap().parent().unwrap().display())
+        imgbuf
+            .save(
+                Path::new(
+                    &format!(
+                        "{}/output.jpg",
+                        env::current_exe().unwrap().parent().unwrap().display()
+                    )
+                )
             )
-        )
-        .unwrap();
+            .unwrap();
+    }
 }
 
 struct VidInfo {
