@@ -28,11 +28,15 @@ thumbnail_gen.exe [视频文件路径] [选项]
 
 #### 选项说明:
 
-`-r, --row <数字>` : 每行图片数量 (默认: 7)
+`-r, --row <数字>` : 每行图片数量 (默认: 5)
 
-`-c, --col <数字>` : 每列图片数量 (默认: 7)
+`-c, --col <数字>` : 每列图片数量 (默认: 5)
 
 `-o, --output <路径>` : 输出文件路径 (默认: 程序目录下的 output.jpg)
+
+`-q, --quality <数字>` : 输出图片质量 (默认: 75)
+
+`-h, --help` : 显示帮助信息
 
 ### 使用示例
 
@@ -52,6 +56,12 @@ thumbnail_gen.exe -r 3 -c 4 "D:\视频.mp4"
 
 ```bash
 thumbnail_gen.exe -o "D:\output.jpg" "D:\视频.mp4"
+```
+
+**指定生成图片质量**
+
+```bash
+thumbnail_gen.exe -q 100 "D:\视频.mp4"
 ```
 
 **完整示例:**
