@@ -32,8 +32,8 @@ struct Args {
     #[clap(
         short = 'q',
         long = "quality",
-        default_value = "75",
-        help = "生成图片的质量。仅对jpeg与webp有效。范围 0-100，默认 75，示例：-q 90"
+        default_value = "100",
+        help = "生成图片的质量。仅对jpeg与webp有效。范围 0-100，默认 100，示例：-q 90"
     )]
     quality: u8,
 
