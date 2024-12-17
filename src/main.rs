@@ -1,5 +1,5 @@
 use std::{ env, fs::File, sync::Arc };
-use image::ImageBuffer;
+use image::{ DynamicImage, ImageBuffer };
 use serde_json::Value;
 use tokio::task::JoinSet;
 use clap::Parser;
@@ -13,11 +13,11 @@ struct Args {
     video: String,
 
     /// 每行图片数量
-    #[clap(short = 'r', long = "row", default_value = "5", help = "每行显示的图片数量，示例：-r 2")]
+    #[clap(short = 'r', long = "row", default_value = "7", help = "每行显示的图片数量，示例：-r 2")]
     row: u32,
 
     /// 每列图片数量
-    #[clap(short = 'c', long = "col", default_value = "5", help = "每列显示的图片数量，示例：-c 3")]
+    #[clap(short = 'c', long = "col", default_value = "7", help = "每列显示的图片数量，示例：-c 3")]
     col: u32,
 
     /// 输出路径
@@ -33,9 +33,25 @@ struct Args {
         short = 'q',
         long = "quality",
         default_value = "75",
-        help = "生成图片的质量，仅对jpeg与webp有效，范围 0-100，默认 75，示例：-q 90"
+        help = "生成图片的质量。仅对jpeg与webp有效。范围 0-100，默认 75，示例：-q 90"
     )]
     quality: u8,
+
+    /// 生成图片的高度
+    #[clap(
+        long = "height",
+        default_value = "7680",
+        help = "生成图片的高度。图像的宽高比将被保留。图像将缩放到适合由 width 和 height 指定的边界内的最大可能尺寸。示例：--height 7680"
+    )]
+    height: u32,
+
+    /// 生成图片的宽度
+    #[clap(
+        long = "width",
+        default_value = "4320",
+        help = "生成图片的宽度。图像的宽高比将被保留图像将缩放到适合由 width 和 height 指定的边界内的最大可能尺寸。示例：--width 4320"
+    )]
+    width: u32,
 }
 
 #[tokio::main]
@@ -112,7 +128,7 @@ async fn main() {
     // 保存图片
     let format = output.split('.').last().unwrap().to_lowercase();
 
-    save_file(&format, file, args.quality, imgbuf);
+    save_file(args.height, args.width, &format, file, args.quality, imgbuf);
 }
 
 struct VidInfo {
@@ -202,7 +218,16 @@ async fn extract_pic(video_path: Arc<String>, time: u32, index: u32) -> (u32, Ve
     (index, pic.stdout)
 }
 
-fn save_file(format: &str, file: File, quality: u8, img: ImageBuffer<image::Rgb<u8>, Vec<u8>>) {
+fn save_file(
+    height: u32,
+    width: u32,
+    format: &str,
+    file: File,
+    quality: u8,
+    img: ImageBuffer<image::Rgb<u8>, Vec<u8>>
+) {
+    let img = DynamicImage::from(img).resize(width, height, image::imageops::FilterType::Triangle);
+
     match format {
         "jpeg" | "jpg" => {
             img.write_with_encoder(
@@ -213,13 +238,7 @@ fn save_file(format: &str, file: File, quality: u8, img: ImageBuffer<image::Rgb<
             img.write_with_encoder(
                 image::codecs::png::PngEncoder::new_with_quality(
                     file,
-                    if quality < 10 {
-                        image::codecs::png::CompressionType::Fast
-                    } else if quality < 90 {
-                        image::codecs::png::CompressionType::Default
-                    } else {
-                        image::codecs::png::CompressionType::Best
-                    },
+                    image::codecs::png::CompressionType::Best,
                     image::codecs::png::FilterType::NoFilter
                 )
             ).unwrap();
