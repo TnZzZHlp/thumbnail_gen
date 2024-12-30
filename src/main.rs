@@ -32,7 +32,7 @@ struct Args {
     #[clap(
         short = 'q',
         long = "quality",
-        default_value = "100",
+        default_value = "75",
         help = "生成图片的质量。仅对jpeg与webp有效。范围 0-100，默认 100，示例：-q 90"
     )]
     quality: u8,
@@ -40,8 +40,8 @@ struct Args {
     /// 生成图片的高度
     #[clap(
         long = "height",
-        default_value = "7680",
-        help = "生成图片的高度。图像的宽高比将被保留。图像将缩放到适合由 width 和 height 指定的边界内的最大可能尺寸。示例：--height 7680"
+        default_value = "100000",
+        help = "生成图片的高度。图像的宽高比将被保留。图像会被缩放到尽可能大的尺寸，同时确保其尺寸不超过由 width 和 height 定义的边界。示例：--height 7680"
     )]
     height: u32,
 
@@ -49,7 +49,7 @@ struct Args {
     #[clap(
         long = "width",
         default_value = "4320",
-        help = "生成图片的宽度。图像的宽高比将被保留图像将缩放到适合由 width 和 height 指定的边界内的最大可能尺寸。示例：--width 4320"
+        help = "生成图片的宽度。图像的宽高比将被保留。图像会被缩放到尽可能大的尺寸，同时确保其尺寸不超过由 width 和 height 定义的边界。示例：--width 4320"
     )]
     width: u32,
 }

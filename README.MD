@@ -1,6 +1,12 @@
 # 视频缩略图网格生成器
 
 从视频文件生成缩略图网格预览图的命令行工具。
+</br>
+
+## 生成效果预览
+
+![alt text](img/output.jpg)
+</br>
 
 ## 功能特点
 
@@ -32,11 +38,11 @@ thumbnail_gen.exe [视频文件路径] [选项]
 
 `-c, --col <数字>` : 每列图片数量 (默认: 7)
 
-`-o, --output <路径>` : 输出文件路径 (默认: 程序目录下的 output.jpg)
+`-o, --output <路径>` : 输出文件路径 (默认: 程序目录下的 output.jpg) 支持 jpeg、png 和 webp 格式
 
-`-q, --quality <数字>` : 输出图片质量 (默认: 100)
+`-q, --quality <数字>` : 输出图片质量 (默认: 75)
 
-`--height <数字>` : 输出图片高度 (默认: 7680)
+`--height <数字>` : 输出图片高度 (默认: 100000)
 
 `--width <数字>` : 输出图片宽度 (默认: 4320)
 
@@ -71,7 +77,7 @@ thumbnail_gen.exe -q 100 "D:\视频.mp4"
 **指定生成图片尺寸**
 
 ```bash
-thumbnail_gen.exe --height 1080 --width 1920 "D:\视频.mp4"
+thumbnail_gen.exe --width 1920 "D:\视频.mp4"
 ```
 
 **完整示例:**
