@@ -1,4 +1,4 @@
-use std::{ env, fs::File, sync::Arc };
+use std::{ env, fs::File, path::Path, sync::Arc };
 use image::{ DynamicImage, ImageBuffer };
 use serde_json::Value;
 use tokio::task::JoinSet;
@@ -13,11 +13,16 @@ struct Args {
     video: String,
 
     /// 每行图片数量
-    #[clap(short = 'r', long = "row", default_value = "7", help = "每行显示的图片数量，示例：-r 2")]
+    #[clap(short = 'r', long = "row", default_value = "4", help = "每行显示的图片数量，示例：-r 2")]
     row: u32,
 
     /// 每列图片数量
-    #[clap(short = 'c', long = "col", default_value = "7", help = "每列显示的图片数量，示例：-c 3")]
+    #[clap(
+        short = 'c',
+        long = "col",
+        default_value = "14",
+        help = "每列显示的图片数量，示例：-c 3"
+    )]
     col: u32,
 
     /// 输出路径
@@ -48,7 +53,7 @@ struct Args {
     /// 生成图片的宽度
     #[clap(
         long = "width",
-        default_value = "4320",
+        default_value = "3840",
         help = "生成图片的宽度。图像的宽高比将被保留。图像会被缩放到尽可能大的尺寸，同时确保其尺寸不超过由 width 和 height 定义的边界。示例：--width 4320"
     )]
     width: u32,
@@ -59,7 +64,11 @@ async fn main() {
     let args = Args::parse();
 
     let output = args.output.unwrap_or_else(||
-        format!("{}/output.jpg", env::current_exe().unwrap().parent().unwrap().display())
+        format!(
+            "{}/{}.jpg",
+            env::current_exe().unwrap().parent().unwrap().display(),
+            Path::new(args.video.as_str()).file_name().unwrap().to_str().unwrap()
+        )
     );
 
     let file = std::fs::File::create(&output).unwrap();
