@@ -37,7 +37,7 @@ thumbnail_gen.exe [视频文件路径] [选项]
 
 `-c, --col <数字>` : 每列图片数量 (默认: 7)
 
-`-o, --output <路径>` : 输出文件路径 (默认: 程序目录下的 output.jpg) 支持 jpeg、png 和 webp 格式
+`-o, --output <路径>` : 输出文件路径 (默认生成程序目录下与视频文件名同名的 jpg 图片) 支持 jpeg、png 和 webp 格式
 
 `-q, --quality <数字>` : 输出图片质量 (默认: 75)
 
