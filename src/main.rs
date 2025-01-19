@@ -13,16 +13,11 @@ struct Args {
     video: String,
 
     /// 每行图片数量
-    #[clap(short = 'r', long = "row", default_value = "4", help = "每行显示的图片数量，示例：-r 2")]
+    #[clap(short = 'r', long = "row", default_value = "7", help = "每行显示的图片数量，示例：-r 2")]
     row: u32,
 
     /// 每列图片数量
-    #[clap(
-        short = 'c',
-        long = "col",
-        default_value = "14",
-        help = "每列显示的图片数量，示例：-c 3"
-    )]
+    #[clap(short = 'c', long = "col", default_value = "7", help = "每列显示的图片数量，示例：-c 3")]
     col: u32,
 
     /// 输出路径
