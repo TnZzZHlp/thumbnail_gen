@@ -1,255 +1,117 @@
-use std::{ env, fs::File, path::Path, sync::Arc };
-use image::{ DynamicImage, ImageBuffer };
-use serde_json::Value;
-use tokio::task::JoinSet;
+mod cli;
+mod image;
+mod video;
+
+use anyhow::{Context, Result};
 use clap::Parser;
+use std::{env, fs::File, path::Path, sync::Arc};
+use tokio::task::JoinSet;
 
-#[derive(Parser)]
-#[clap(name = "thumbnail_gen")]
-#[clap(about = "从视频生成缩略图网格")]
-struct Args {
-    /// 视频文件路径
-    #[clap(value_parser, help = "视频文件路径，支持拖放或命令行参数")]
-    video: String,
-
-    /// 每行图片数量
-    #[clap(short = 'r', long = "row", default_value = "7", help = "每行显示的图片数量，示例：-r 2")]
-    row: u32,
-
-    /// 每列图片数量
-    #[clap(short = 'c', long = "col", default_value = "7", help = "每列显示的图片数量，示例：-c 3")]
-    col: u32,
-
-    /// 输出路径
-    #[clap(
-        short = 'o',
-        long = "output",
-        help = "输出文件路径，默认输出路径为程序同目录，支持jpeg、png和webp格式，示例：-o C:\\output.jpg"
-    )]
-    output: Option<String>,
-
-    /// 生成图片的质量
-    #[clap(
-        short = 'q',
-        long = "quality",
-        default_value = "75",
-        help = "生成图片的质量。仅对jpeg与webp有效。范围 0-100，默认 100，示例：-q 90"
-    )]
-    quality: u8,
-
-    /// 生成图片的高度
-    #[clap(
-        long = "height",
-        default_value = "100000",
-        help = "生成图片的高度。图像的宽高比将被保留。图像会被缩放到尽可能大的尺寸，同时确保其尺寸不超过由 width 和 height 定义的边界。示例：--height 7680"
-    )]
-    height: u32,
-
-    /// 生成图片的宽度
-    #[clap(
-        long = "width",
-        default_value = "3840",
-        help = "生成图片的宽度。图像的宽高比将被保留。图像会被缩放到尽可能大的尺寸，同时确保其尺寸不超过由 width 和 height 定义的边界。示例：--width 4320"
-    )]
-    width: u32,
-}
+use cli::Args;
+use image::{compose_thumbnail_grid, save_file};
+use video::{extract_pic, get_vid_info};
 
 #[tokio::main]
-async fn main() {
+async fn main() -> Result<()> {
+    let start_time = std::time::Instant::now();
     let args = Args::parse();
 
-    let output = args.output.unwrap_or_else(||
-        format!(
-            "{}/{}.jpg",
-            env::current_exe().unwrap().parent().unwrap().display(),
-            Path::new(args.video.as_str()).file_name().unwrap().to_str().unwrap()
-        )
-    );
+    let output = args.output.clone().unwrap_or_else(|| {
+        let exe_path = env::current_exe().expect("无法获取程序路径");
+        let parent_dir = exe_path.parent().expect("无法获取程序目录");
+        let video_filename = Path::new(&args.video)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .expect("无法解析视频文件名");
 
-    let file = std::fs::File::create(&output).unwrap();
+        format!("{}/{}.jpg", parent_dir.display(), video_filename)
+    });
 
-    let wid_pics = args.row;
-    let hei_pics = args.col;
+    println!("正在处理视频: {}", args.video);
+    println!("输出路径: {}", output);
 
-    // 调用ffprobe获取视频信息
+    let file = File::create(&output).context("无法创建输出文件")?;
+
     let video_path = Arc::new(args.video);
 
-    let vid_info = get_vid_info(&video_path);
+    // 获取视频信息
+    let vid_info = get_vid_info(&video_path).context("无法获取视频信息")?;
 
-    // 计算最终图片的宽度和高度
-    let final_width: u32 = vid_info.width * wid_pics + 10 * (wid_pics + 1);
-    let final_height: u32 = vid_info.height * hei_pics + 10 * (hei_pics + 1);
+    println!(
+        "视频信息: {}x{}, 时长: {:.2}秒",
+        vid_info.width, vid_info.height, vid_info.duration
+    );
 
-    // 计算每隔多少秒取一帧
-    let interval = (vid_info.duration / ((wid_pics * hei_pics) as f64)) * 0.9;
+    // 计算最终图片的尺寸
+    let padding = 10;
+    let final_width = vid_info.width * args.row + padding * (args.row + 1);
+    let final_height = vid_info.height * args.col + padding * (args.col + 1);
 
-    // 调用ffmpeg提取图片
+    println!("生成缩略图: {}行 x {}列", args.col, args.row);
+
+    // 计算采样间隔（留10%缓冲避免超出视频时长）
+    let total_frames = args.row * args.col;
+    let interval = (vid_info.duration / total_frames as f64) * 0.9;
+
+    // 并发提取图片帧
     let mut tasks = JoinSet::new();
-
-    for i in 1..=wid_pics * hei_pics {
+    for i in 1..=total_frames {
         let time = ((i as f64) * interval) as u32;
         let video_path = Arc::clone(&video_path);
         tasks.spawn(extract_pic(video_path, time, i));
     }
 
-    let pics: Vec<(u32, Vec<u8>)> = tasks.join_all().await.into_iter().collect();
+    println!("正在提取 {} 帧...", total_frames);
+    let extract_start = std::time::Instant::now();
 
-    // 按照索引排序
-    let mut pics = pics;
+    // 收集所有结果
+    let mut pics = Vec::new();
+    while let Some(result) = tasks.join_next().await {
+        let pic = result.context("任务执行失败")?.context("提取图片失败")?;
+        pics.push(pic);
+    }
+
+    println!(
+        "✓ 帧提取完成，耗时: {:.2}秒",
+        extract_start.elapsed().as_secs_f64()
+    );
+
+    // 按索引排序
     pics.sort_by_key(|(index, _)| *index);
 
-    // 保存图片
-    let mut imgbuf = image::ImageBuffer::new(final_width as u32, final_height as u32);
+    println!("正在组合图片...");
+    let compose_start = std::time::Instant::now();
 
-    let mut row = 1;
-    let mut col = 1;
+    // 创建画布并组合图片
+    let imgbuf = compose_thumbnail_grid(
+        pics,
+        &vid_info,
+        args.row,
+        args.col,
+        padding,
+        final_width,
+        final_height,
+    )?;
 
-    for (i, (_, pic)) in pics.iter().enumerate() {
-        // 计算当前图片的位置
-        let x = col * 10 + (col - 1) * vid_info.width;
-        let y = row * 10 + (row - 1) * vid_info.height;
+    println!(
+        "✓ 组合完成，耗时: {:.2}秒",
+        compose_start.elapsed().as_secs_f64()
+    );
 
-        // 直接在原图上操作
-        for py in 0..vid_info.height {
-            for px in 0..vid_info.width {
-                let base_index = (py * vid_info.width + px) * 3;
-                let r = pic[base_index as usize];
-                let g = pic[(base_index as usize) + 1];
-                let b = pic[(base_index as usize) + 2];
+    // 保存文件
+    let format = output.rsplit('.').next().unwrap_or("jpg").to_lowercase();
 
-                imgbuf.put_pixel(x + px, y + py, image::Rgb([r, g, b]));
-            }
-        }
+    println!("正在保存为 {} 格式...", format);
+    let save_start = std::time::Instant::now();
+    save_file(args.height, args.width, &format, file, args.quality, imgbuf)?;
 
-        if (i + 1) % (wid_pics as usize) == 0 {
-            row += 1;
-            col = 1;
-        } else {
-            col += 1;
-        }
-    }
-
-    // 保存图片
-    let format = output.split('.').last().unwrap().to_lowercase();
-
-    save_file(args.height, args.width, &format, file, args.quality, imgbuf);
-}
-
-struct VidInfo {
-    width: u32,
-    height: u32,
-    duration: f64,
-}
-
-fn get_vid_info(video_path: &str) -> VidInfo {
-    // 调用ffprobe获取视频信息
-    let info = std::process::Command
-        ::new("ffprobe")
-        .args([
-            "-v",
-            "error",
-            "-select_streams",
-            "v:0",
-            "-show_entries",
-            "stream=width,height",
-            "-show_format",
-            "-of",
-            "json",
-            video_path,
-        ])
-        .output()
-        .expect("ffprobe failed");
-
-    let info_str = String::from_utf8(info.stdout).expect("ffprobe output is not utf8");
-
-    let json: Value = match serde_json::from_str(&info_str) {
-        Ok(json) => json,
-        Err(e) => {
-            println!("Error parsing ffprobe output: {}", e);
-            println!("ffprobe output: {}", info_str);
-            panic!("ffprobe failed");
-        }
-    };
-
-    let width = json["streams"][0]["width"].as_u64().expect("无法解析视频宽度") as u32;
-    let height = json["streams"][0]["height"].as_u64().expect("无法解析视频高度") as u32;
-    let duration = json["format"]["duration"]
-        .as_str()
-        .expect("无法解析视频时长")
-        .parse::<f64>()
-        .expect("无法解析视频时长");
-
-    VidInfo {
-        width,
-        height,
-        duration,
-    }
-}
-
-// 截取图片
-async fn extract_pic(video_path: Arc<String>, time: u32, index: u32) -> (u32, Vec<u8>) {
-    println!("提取第 {} 秒的图片", time);
-
-    let pic = std::process::Command
-        ::new("ffmpeg")
-        .args([
-            "-ss",
-            &time.to_string(),
-            "-noaccurate_seek",
-            "-i",
-            &video_path,
-            "-vframes",
-            "1",
-            "-an",
-            "-f",
-            "rawvideo",
-            "-pix_fmt",
-            "rgb24",
-            "pipe:1",
-        ])
-        .stderr(std::process::Stdio::piped()) // 捕获错误输出
-        .stdout(std::process::Stdio::piped()) // 确保捕获标准输出
-        .output()
-        .expect("ffmpeg failed");
-
-    // 添加错误检查
-    if !pic.status.success() {
-        let error = String::from_utf8_lossy(&pic.stderr);
-        println!("FFmpeg error: {}", error);
-        panic!("FFmpeg 执行失败");
-    }
-
-    (index, pic.stdout)
-}
-
-fn save_file(
-    height: u32,
-    width: u32,
-    format: &str,
-    file: File,
-    quality: u8,
-    img: ImageBuffer<image::Rgb<u8>, Vec<u8>>
-) {
-    let img = DynamicImage::from(img).resize(width, height, image::imageops::FilterType::Triangle);
-
-    match format {
-        "jpeg" | "jpg" => {
-            img.write_with_encoder(
-                image::codecs::jpeg::JpegEncoder::new_with_quality(file, quality)
-            ).unwrap();
-        }
-        "png" => {
-            img.write_with_encoder(
-                image::codecs::png::PngEncoder::new_with_quality(
-                    file,
-                    image::codecs::png::CompressionType::Best,
-                    image::codecs::png::FilterType::NoFilter
-                )
-            ).unwrap();
-        }
-        "webp" => {
-            img.write_with_encoder(image::codecs::webp::WebPEncoder::new_lossless(file)).unwrap();
-        }
-        _ => panic!("不支持的格式"),
-    }
+    println!(
+        "✓ 保存完成，耗时: {:.2}秒",
+        save_start.elapsed().as_secs_f64()
+    );
+    println!(
+        "\n🎉 缩略图生成完成！总耗时: {:.2}秒",
+        start_time.elapsed().as_secs_f64()
+    );
+    Ok(())
 }
