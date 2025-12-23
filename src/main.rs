@@ -1,8 +1,9 @@
-use std::{ env, fs::File, path::Path, sync::Arc };
-use image::{ DynamicImage, ImageBuffer };
-use serde_json::Value;
-use tokio::task::JoinSet;
 use clap::Parser;
+use rayon::prelude::*;
+use std::{env, path::Path, sync::Arc};
+
+mod ffmpeg;
+mod img_ops;
 
 #[derive(Parser)]
 #[clap(name = "thumbnail_gen")]
@@ -13,11 +14,21 @@ struct Args {
     video: String,
 
     /// 每行图片数量
-    #[clap(short = 'r', long = "row", default_value = "7", help = "每行显示的图片数量，示例：-r 2")]
+    #[clap(
+        short = 'r',
+        long = "row",
+        default_value = "7",
+        help = "每行显示的图片数量，示例：-r 2"
+    )]
     row: u32,
 
     /// 每列图片数量
-    #[clap(short = 'c', long = "col", default_value = "7", help = "每列显示的图片数量，示例：-c 3")]
+    #[clap(
+        short = 'c',
+        long = "col",
+        default_value = "7",
+        help = "每列显示的图片数量，示例：-c 3"
+    )]
     col: u32,
 
     /// 输出路径
@@ -54,17 +65,21 @@ struct Args {
     width: u32,
 }
 
-#[tokio::main]
-async fn main() {
+fn main() {
+    tracing_subscriber::fmt::init();
     let args = Args::parse();
 
-    let output = args.output.unwrap_or_else(||
+    let output = args.output.unwrap_or_else(|| {
         format!(
             "{}/{}.jpg",
             env::current_exe().unwrap().parent().unwrap().display(),
-            Path::new(args.video.as_str()).file_name().unwrap().to_str().unwrap()
+            Path::new(args.video.as_str())
+                .file_name()
+                .unwrap()
+                .to_str()
+                .unwrap()
         )
-    );
+    });
 
     let file = std::fs::File::create(&output).unwrap();
 
@@ -74,182 +89,124 @@ async fn main() {
     // 调用ffprobe获取视频信息
     let video_path = Arc::new(args.video);
 
-    let vid_info = get_vid_info(&video_path);
+    let vid_info = ffmpeg::get_vid_info(&video_path);
+
+    // 计算缩放比例
+    let full_width = vid_info.width * wid_pics + 10 * (wid_pics + 1);
+    let full_height = vid_info.height * hei_pics + 10 * (hei_pics + 1);
+
+    let scale_w = args.width as f64 / full_width as f64;
+    let scale_h = args.height as f64 / full_height as f64;
+    let scale = scale_w.min(scale_h).min(1.0); // 不放大
+
+    let thumb_width = (vid_info.width as f64 * scale) as u32;
+    let thumb_height = (vid_info.height as f64 * scale) as u32;
+    let padding = (10.0 * scale) as u32;
 
     // 计算最终图片的宽度和高度
-    let final_width: u32 = vid_info.width * wid_pics + 10 * (wid_pics + 1);
-    let final_height: u32 = vid_info.height * hei_pics + 10 * (hei_pics + 1);
+    let final_width: u32 = thumb_width * wid_pics + padding * (wid_pics + 1);
+    let final_height: u32 = thumb_height * hei_pics + padding * (hei_pics + 1);
 
     // 计算每隔多少秒取一帧
     let interval = (vid_info.duration / ((wid_pics * hei_pics) as f64)) * 0.9;
 
     // 调用ffmpeg提取图片
-    let mut tasks = JoinSet::new();
-
-    for i in 1..=wid_pics * hei_pics {
-        let time = ((i as f64) * interval) as u32;
-        let video_path = Arc::clone(&video_path);
-        tasks.spawn(extract_pic(video_path, time, i));
-    }
-
-    let pics: Vec<(u32, Vec<u8>)> = tasks.join_all().await.into_iter().collect();
+    let pics: Vec<(u32, Vec<u8>)> = (1..=wid_pics * hei_pics)
+        .into_par_iter()
+        .map(|i| {
+            let time = ((i as f64) * interval) as u32;
+            let video_path = Arc::clone(&video_path);
+            ffmpeg::extract_pic(video_path, time, i, thumb_width, thumb_height)
+        })
+        .collect();
 
     // 按照索引排序
     let mut pics = pics;
     pics.sort_by_key(|(index, _)| *index);
 
     // 保存图片
-    let mut imgbuf = image::ImageBuffer::new(final_width as u32, final_height as u32);
+    let mut imgbuf = vec![0u8; (final_width * final_height * 3) as usize];
 
-    let mut row = 1;
-    let mut col = 1;
-
-    for (i, (_, pic)) in pics.iter().enumerate() {
-        // 计算当前图片的位置
-        let x = col * 10 + (col - 1) * vid_info.width;
-        let y = row * 10 + (row - 1) * vid_info.height;
-
-        // 直接在原图上操作
-        for py in 0..vid_info.height {
-            for px in 0..vid_info.width {
-                let base_index = (py * vid_info.width + px) * 3;
-                let r = pic[base_index as usize];
-                let g = pic[(base_index as usize) + 1];
-                let b = pic[(base_index as usize) + 2];
-
-                imgbuf.put_pixel(x + px, y + py, image::Rgb([r, g, b]));
+    // 使用 rayon 并行处理图片合成
+    imgbuf
+        .par_chunks_mut((final_width * 3) as usize)
+        .enumerate()
+        .for_each(|(y, row_slice)| {
+            let y = y as u32;
+            // 填充背景色 (白色)
+            for pixel in row_slice.chunks_mut(3) {
+                pixel[0] = 255;
+                pixel[1] = 255;
+                pixel[2] = 255;
             }
-        }
 
-        if (i + 1) % (wid_pics as usize) == 0 {
-            row += 1;
-            col = 1;
-        } else {
-            col += 1;
-        }
-    }
+            // 计算当前行属于哪一行缩略图
+            // y = row_idx * (thumb_height + padding) + padding + local_y
+            // 但是我们需要反过来，给定 y，判断它是否在某个缩略图的垂直范围内
+            // 每一行缩略图的高度区间:
+            // Start: row_idx * (thumb_height + padding) + padding
+            // End: Start + thumb_height
+
+            let row_total_height = thumb_height + padding;
+            if y < padding {
+                return; // 顶部 padding
+            }
+            let effective_y = y - padding;
+            let row_idx = effective_y / row_total_height;
+            let local_y = effective_y % row_total_height;
+
+            if local_y >= thumb_height {
+                return; // 缩略图下方的 padding
+            }
+
+            if row_idx >= hei_pics {
+                return;
+            }
+
+            // 这一行包含 wid_pics 个缩略图
+            // 遍历这一行的所有缩略图
+            for col_idx in 0..wid_pics {
+                let pic_idx = (row_idx * wid_pics + col_idx) as usize;
+                if pic_idx >= pics.len() {
+                    continue;
+                }
+
+                let (_, pic_data) = &pics[pic_idx];
+
+                // 计算该缩略图在当前行的水平位置
+                let x_start = padding + col_idx * (thumb_width + padding);
+                let x_end = x_start + thumb_width;
+
+                // 复制像素数据
+                // pic_data 是 thumb_width * thumb_height * 3
+                // 我们需要 pic_data 中第 local_y 行的数据
+                let src_start = (local_y * thumb_width * 3) as usize;
+                let src_end = src_start + (thumb_width * 3) as usize;
+
+                if src_end <= pic_data.len() {
+                    let src_row = &pic_data[src_start..src_end];
+                    let dest_start = (x_start * 3) as usize;
+                    let dest_end = (x_end * 3) as usize;
+
+                    if dest_end <= row_slice.len() {
+                        row_slice[dest_start..dest_end].copy_from_slice(src_row);
+                    }
+                }
+            }
+        });
+
+    let imgbuf = image::ImageBuffer::from_raw(final_width, final_height, imgbuf).unwrap();
 
     // 保存图片
-    let format = output.split('.').last().unwrap().to_lowercase();
+    let format = output.split('.').next_back().unwrap().to_lowercase();
 
-    save_file(args.height, args.width, &format, file, args.quality, imgbuf);
-}
-
-struct VidInfo {
-    width: u32,
-    height: u32,
-    duration: f64,
-}
-
-fn get_vid_info(video_path: &str) -> VidInfo {
-    // 调用ffprobe获取视频信息
-    let info = std::process::Command
-        ::new("ffprobe")
-        .args([
-            "-v",
-            "error",
-            "-select_streams",
-            "v:0",
-            "-show_entries",
-            "stream=width,height",
-            "-show_format",
-            "-of",
-            "json",
-            video_path,
-        ])
-        .output()
-        .expect("ffprobe failed");
-
-    let info_str = String::from_utf8(info.stdout).expect("ffprobe output is not utf8");
-
-    let json: Value = match serde_json::from_str(&info_str) {
-        Ok(json) => json,
-        Err(e) => {
-            println!("Error parsing ffprobe output: {}", e);
-            println!("ffprobe output: {}", info_str);
-            panic!("ffprobe failed");
-        }
-    };
-
-    let width = json["streams"][0]["width"].as_u64().expect("无法解析视频宽度") as u32;
-    let height = json["streams"][0]["height"].as_u64().expect("无法解析视频高度") as u32;
-    let duration = json["format"]["duration"]
-        .as_str()
-        .expect("无法解析视频时长")
-        .parse::<f64>()
-        .expect("无法解析视频时长");
-
-    VidInfo {
-        width,
-        height,
-        duration,
-    }
-}
-
-// 截取图片
-async fn extract_pic(video_path: Arc<String>, time: u32, index: u32) -> (u32, Vec<u8>) {
-    println!("提取第 {} 秒的图片", time);
-
-    let pic = std::process::Command
-        ::new("ffmpeg")
-        .args([
-            "-ss",
-            &time.to_string(),
-            "-noaccurate_seek",
-            "-i",
-            &video_path,
-            "-vframes",
-            "1",
-            "-an",
-            "-f",
-            "rawvideo",
-            "-pix_fmt",
-            "rgb24",
-            "pipe:1",
-        ])
-        .stderr(std::process::Stdio::piped()) // 捕获错误输出
-        .stdout(std::process::Stdio::piped()) // 确保捕获标准输出
-        .output()
-        .expect("ffmpeg failed");
-
-    // 添加错误检查
-    if !pic.status.success() {
-        let error = String::from_utf8_lossy(&pic.stderr);
-        println!("FFmpeg error: {}", error);
-        panic!("FFmpeg 执行失败");
-    }
-
-    (index, pic.stdout)
-}
-
-fn save_file(
-    height: u32,
-    width: u32,
-    format: &str,
-    file: File,
-    quality: u8,
-    img: ImageBuffer<image::Rgb<u8>, Vec<u8>>
-) {
-    let img = DynamicImage::from(img).resize(width, height, image::imageops::FilterType::Triangle);
-
-    match format {
-        "jpeg" | "jpg" => {
-            img.write_with_encoder(
-                image::codecs::jpeg::JpegEncoder::new_with_quality(file, quality)
-            ).unwrap();
-        }
-        "png" => {
-            img.write_with_encoder(
-                image::codecs::png::PngEncoder::new_with_quality(
-                    file,
-                    image::codecs::png::CompressionType::Best,
-                    image::codecs::png::FilterType::NoFilter
-                )
-            ).unwrap();
-        }
-        "webp" => {
-            img.write_with_encoder(image::codecs::webp::WebPEncoder::new_lossless(file)).unwrap();
-        }
-        _ => panic!("不支持的格式"),
-    }
+    // 已经缩放过了，这里传入 final_height/width 避免再次缩放
+    img_ops::save_file(
+        final_height,
+        final_width,
+        &format,
+        file,
+        args.quality,
+        imgbuf,
+    );
 }
