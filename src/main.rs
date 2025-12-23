@@ -1,6 +1,7 @@
 use clap::Parser;
 use rayon::prelude::*;
-use std::{env, path::Path, sync::Arc};
+use std::{path::Path, sync::Arc};
+use tracing::info;
 
 mod ffmpeg;
 mod img_ops;
@@ -69,16 +70,13 @@ fn main() {
     tracing_subscriber::fmt::init();
     let args = Args::parse();
 
+    info!(video_path = %args.video, "开始提取视频缩略图");
+
     let output = args.output.unwrap_or_else(|| {
-        format!(
-            "{}/{}.jpg",
-            env::current_exe().unwrap().parent().unwrap().display(),
-            Path::new(args.video.as_str())
-                .file_name()
-                .unwrap()
-                .to_str()
-                .unwrap()
-        )
+        let video_path = Path::new(&args.video);
+        let parent = video_path.parent().unwrap_or_else(|| Path::new("."));
+        let filename = format!("{}.jpg", video_path.file_name().unwrap().to_str().unwrap());
+        parent.join(filename).to_str().unwrap().to_string()
     });
 
     let file = std::fs::File::create(&output).unwrap();
